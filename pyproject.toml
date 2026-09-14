@@ -1,0 +1,28 @@
+[project]
+name = "research-paper-ai"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tulsee", email = "ramtulsi022@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "pymupdf>=1.28.2",
+    "rich>=15.0.0",
+    "tiktoken>=0.14.0",
+]
+
+[project.scripts]
+research-paper-ai = "research_paper_ai:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
