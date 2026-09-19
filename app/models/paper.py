@@ -3,6 +3,50 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class Table(BaseModel):
+    table_id: str
+
+    caption: str | None = None
+
+    page_number: int
+
+    bbox: tuple[float, float, float, float] | None = None
+
+    text: str = ""
+
+    start_char: int | None = None
+    end_char: int | None = None
+
+
+class Figure(BaseModel):
+    figure_id: str
+
+    caption: str | None = None
+
+    page_number: int
+
+    bbox: tuple[float, float, float, float] | None = None
+
+    text: str = ""
+
+    start_char: int | None = None
+    end_char: int | None = None
+
+
+class Reference(BaseModel):
+    reference_id: str
+
+    number: int | None = None
+
+    raw_text: str
+
+    authors: list[str] = Field(default_factory=list)
+
+    title: str | None = None
+
+    year: int | None = None
+
+
 class TextBlock(BaseModel):
     block_id: str
     page_number: int
@@ -72,11 +116,11 @@ class Paper(BaseModel):
 
     sections: list[Section] = Field(default_factory=list)
 
-    references: list[dict[str, Any]] = Field(default_factory=list)
+    tables: list[Table] = Field(default_factory=list)
 
-    tables: list[dict[str, Any]] = Field(default_factory=list)
+    figures: list[Figure] = Field(default_factory=list)
 
-    figures: list[dict[str, Any]] = Field(default_factory=list)
+    references: list[Reference] = Field(default_factory=list)
 
     parser: str = "pymupdf"
     parser_version: str | None = None
