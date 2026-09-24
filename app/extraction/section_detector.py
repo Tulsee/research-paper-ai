@@ -156,6 +156,12 @@ def canonical_role(text: str) -> str | None:
     if len(cleaned.split()) > MAX_PHRASE_MATCH_WORDS:
         return None
 
+    # The most specific phrase wins, not the first one declared: in
+    # "Literature Review Introduction", "literature review" beats
+    # "introduction", so the heading is related work.
+    best_role: str | None = None
+    best_length = 0
+
     for role, patterns in CANONICAL_PATTERNS.items():
         for pattern in patterns:
             if pattern in EXACT_ONLY_PATTERNS:
@@ -164,10 +170,96 @@ def canonical_role(text: str) -> str | None:
             # Patterns are anchored phrases; reuse them unanchored.
             phrase = pattern.strip("^$")
 
-            if re.search(rf"\b(?:{phrase})\b", cleaned, re.IGNORECASE):
-                return role
+            match = re.search(rf"\b(?:{phrase})\b", cleaned, re.IGNORECASE)
 
-    return None
+            if match and len(match.group(0)) > best_length:
+                best_role = role
+                best_length = len(match.group(0))
+
+    return best_role
+
+
+# Front matter that lists the document's own structure. Its entries look
+# exactly like headings, so they must be excluded before heading detection
+# or every section gets a phantom duplicate.
+TOC_HEADING = re.compile(
+    r"""
+    ^(
+        (table\s+of\s+)?contents
+        |
+        list\s+of\s+(figures|tables|abbreviations|acronyms|symbols)
+    )$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# A contents entry: text, then leaders or a line break, then a page number.
+# "Abstract \n2", "3 Methodology .... 16", "References    51".
+TOC_ENTRY = re.compile(
+    r"""
+    [^\s.]                      # the end of the entry text
+    [ \t]*
+    (?:
+        \.{2,}                  # dot leaders
+        |
+        [ \t]{3,}               # a wide gap
+        |
+        \n[ \t]*                # or the number on its own line
+    )
+    [ \t]*
+    \d{1,4}
+    [ \t]*$
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+# A contents page is front matter; a page this far in is body text that
+# merely happens to end lines with numbers.
+TOC_MAX_PAGE_FRACTION = 0.25
+TOC_MIN_PAGES_SEARCHED = 10
+
+TOC_MIN_ENTRIES = 3
+TOC_MIN_ENTRY_RATIO = 0.4
+
+
+def toc_page_numbers(paper: Paper) -> set[int]:
+    """
+    Page numbers that are a table of contents (or list of figures/tables).
+
+    Detection is per page rather than per line: contents pages are almost
+    always wholly contents, and judging a single line in the middle of the
+    body text is far riskier than judging a front-matter page.
+    """
+
+    if not paper.pages:
+        return set()
+
+    searched = max(
+        TOC_MIN_PAGES_SEARCHED,
+        int(len(paper.pages) * TOC_MAX_PAGE_FRACTION),
+    )
+
+    toc_pages: set[int] = set()
+
+    for page in paper.pages[:searched]:
+        if not page.blocks:
+            continue
+
+        if any(TOC_HEADING.match(clean_heading(block.text)) for block in page.blocks):
+            toc_pages.add(page.page_number)
+            continue
+
+        lines = [line for line in page.text.splitlines() if line.strip()]
+
+        if not lines:
+            continue
+
+        entries = len(TOC_ENTRY.findall(page.text))
+
+        if entries >= TOC_MIN_ENTRIES and entries >= len(lines) * TOC_MIN_ENTRY_RATIO:
+            toc_pages.add(page.page_number)
+
+    return toc_pages
 
 
 def heading_level(text: str) -> int:
@@ -404,7 +496,13 @@ def detect_title(paper: Paper) -> str | None:
     return title_from_metadata(paper) or title_from_text(paper)
 
 
-def detect_sections(paper: Paper) -> list[Section]:
+def detect_sections(
+    paper: Paper,
+    toc_pages: set[int] | None = None,
+) -> list[Section]:
+    if toc_pages is None:
+        toc_pages = toc_page_numbers(paper)
+
     all_blocks: list[TextBlock] = []
 
     for page in paper.pages:
@@ -424,6 +522,10 @@ def detect_sections(paper: Paper) -> list[Section]:
     headings: list[TextBlock] = []
 
     for block in all_blocks:
+        # A contents entry reads as a heading but is not one.
+        if block.page_number in toc_pages:
+            continue
+
         if is_probable_heading(
             block,
             body_font_size,
@@ -497,9 +599,20 @@ def extract_abstract(
 def enrich_paper_sections(paper: Paper) -> Paper:
     paper.title = detect_title(paper)
 
-    sections = detect_sections(paper)
+    toc_pages = toc_page_numbers(paper)
+
+    sections = detect_sections(paper, toc_pages)
 
     paper.sections = sections
+
+    if toc_pages:
+        # Surfaced rather than hidden: a page wrongly classified as
+        # contents loses every heading on it.
+        paper.warnings.append(
+            "Skipped table-of-contents page(s) "
+            f"{', '.join(str(number) for number in sorted(toc_pages))} "
+            "during heading detection."
+        )
 
     paper.abstract = extract_abstract(
         paper,

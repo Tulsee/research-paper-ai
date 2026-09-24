@@ -8,8 +8,9 @@
     "abstract",
     "intro",
     "methods",
+    "related_work",
+    "results",
     "conclusion",
-    "references",
-    "results"
+    "references"
   ]
 }
