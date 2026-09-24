@@ -175,45 +175,172 @@ def is_probable_heading(
     return False
 
 
-def detect_title(paper: Paper) -> str | None:
-    if not paper.pages:
+# Metadata titles are often the authoring tool's filename, not a real title.
+JUNK_METADATA_TITLE = re.compile(
+    r"""
+    ^(
+        microsoft\s+word\s*-\s*.*
+        |
+        .*\.(docx?|pdf|tex|rtf|odt)\s*$
+        |
+        untitled.*
+        |
+        (thesis|report|paper|draft|final|manuscript)\s*\d*
+    )$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Running headers, emails, dates and page furniture that sit near the top
+# of the first text page but are never the title.
+NON_TITLE_LINE = re.compile(
+    r"""
+    ^(
+        \S+@\S+                                  # email address
+        |
+        (page\s*)?\d+(\s*/\s*\d+)?              # page numbers
+        |
+        (https?://|www\.)\S+                      # URLs
+        |
+        (doi|arxiv)\b.*                           # identifiers
+        |
+        .*\b(19|20)\d{2}\b\s*$                   # bare dates/years
+    )$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_plausible_title(text: str) -> bool:
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text:
+        return False
+
+    # Titles are a line or two, not a paragraph.
+    if len(text) > 250:
+        return False
+
+    words = text.split()
+
+    if len(words) < 2 or len(words) > 30:
+        return False
+
+    # A section heading ("Abstract", "1 Introduction") is not the title.
+    if canonical_role(text):
+        return False
+
+    if NON_TITLE_LINE.match(text):
+        return False
+
+    # Running text that happens to be short: a title is not a sentence,
+    # and never starts mid-sentence.
+    if not (text[0].isupper() or text[0].isdigit()):
+        return False
+
+    if text.endswith(("...", ".", ",", ";", ":")):
+        return False
+
+    if re.search(r"[.!?]\s+\S", text):
+        return False
+
+    # Require some letters; drop blocks that are mostly digits/symbols.
+    letters = sum(1 for char in text if char.isalpha())
+
+    if letters < len(text) * 0.5:
+        return False
+
+    return True
+
+
+def title_from_metadata(paper: Paper) -> str | None:
+    """Use the PDF's own metadata title when it looks like a real title."""
+
+    raw = (paper.pdf_metadata or {}).get("title", "")
+
+    title = re.sub(r"\s+", " ", str(raw)).strip()
+
+    if not title:
         return None
 
-    first_page = paper.pages[0]
-
-    candidates = [block for block in first_page.blocks if block.text.strip()]
-
-    if not candidates:
+    if JUNK_METADATA_TITLE.match(title):
         return None
 
-    # Restrict title search to the upper portion of page 1.
-    top_blocks = [
-        block for block in candidates if block.bbox[1] <= first_page.height * 0.40
+    if not _is_plausible_title(title):
+        return None
+
+    return title
+
+
+def _page_body_font_size(page) -> float | None:
+    """Typical running-text font size on a single page."""
+
+    sizes = [
+        block.font_size
+        for block in page.blocks
+        if block.font_size is not None and len(block.text.split()) >= 5
     ]
 
-    if not top_blocks:
-        top_blocks = candidates[:10]
+    return median(sizes) if sizes else None
 
-    # Prefer the largest font block.
-    with_font = [block for block in top_blocks if block.font_size is not None]
 
-    if with_font:
-        max_font = max(block.font_size for block in with_font)
+def title_from_text(paper: Paper) -> str | None:
+    """
+    Pick the largest-font plausible block near the top of the first page
+    that actually carries text.
 
-        title_candidates = [
+    Scanned cover pages contain no text at all, so the first page with
+    blocks is used rather than page 1.
+    """
+
+    for page in paper.pages:
+        candidates = [block for block in page.blocks if block.text.strip()]
+
+        if not candidates:
+            continue
+
+        # Only the first page carrying text can hold the title. Looking
+        # further would return a sentence from the body of the paper.
+
+        # Restrict the search to the upper portion of the page, but fall
+        # back to the first few blocks for pages with unusual layouts.
+        top_blocks = [
+            block for block in candidates if block.bbox[1] <= page.height * 0.40
+        ] or candidates[:10]
+
+        body_font_size = _page_body_font_size(page)
+
+        plausible = [
             block
-            for block in with_font
-            if block.font_size and block.font_size >= max_font * 0.90
+            for block in top_blocks
+            if _is_plausible_title(block.text)
+            and (
+                block.font_size is None
+                or body_font_size is None
+                or block.font_size >= body_font_size * 1.10
+            )
         ]
 
-        if title_candidates:
-            # Usually the first large block is the title.
-            return max(
-                title_candidates,
-                key=lambda block: block.font_size or 0,
-            ).text.strip()
+        if not plausible:
+            return None
 
-    return top_blocks[0].text.strip()
+        with_font = [block for block in plausible if block.font_size is not None]
+
+        if with_font:
+            max_font = max(block.font_size for block in with_font)
+
+            # The title is the first block set in (near-)largest type.
+            for block in with_font:
+                if block.font_size and block.font_size >= max_font * 0.90:
+                    return re.sub(r"\s+", " ", block.text).strip()
+
+        return re.sub(r"\s+", " ", plausible[0].text).strip()
+
+    return None
+
+
+def detect_title(paper: Paper) -> str | None:
+    return title_from_metadata(paper) or title_from_text(paper)
 
 
 def detect_sections(paper: Paper) -> list[Section]:
@@ -319,7 +446,18 @@ def enrich_paper_sections(paper: Paper) -> Paper:
     )
 
     if paper.title is None:
-        paper.warnings.append("Could not reliably detect paper title.")
+        # A cover page made of an image (or of vector artwork) carries no
+        # text layer at all, so nothing can be read from it directly.
+        cover_has_no_text = bool(paper.pages and not paper.pages[0].blocks)
+
+        if cover_has_no_text:
+            paper.warnings.append(
+                "Could not detect paper title: page 1 carries no text layer "
+                "(cover image) and the PDF metadata has no usable title. "
+                "OCR would be required to read it."
+            )
+        else:
+            paper.warnings.append("Could not reliably detect paper title.")
 
     if paper.abstract is None:
         paper.warnings.append("Could not reliably detect abstract.")

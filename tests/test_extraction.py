@@ -1,4 +1,4 @@
-import fitz
+import pymupdf
 
 from app.extraction.enrich_paper import enrich_paper
 from app.ingestion.pymupdf_parser import PyMuPDFParser
@@ -6,7 +6,7 @@ from app.ingestion.pymupdf_parser import PyMuPDFParser
 
 def create_test_pdf(path):
 
-    document = fitz.open()
+    document = pymupdf.open()
 
     page = document.new_page()
 

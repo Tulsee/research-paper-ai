@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import fitz
+import pymupdf
 
 from app.models.paper import Paper, PaperPage, TextBlock
 
@@ -83,7 +83,7 @@ class PyMuPDFParser:
         current_char_offset = 0
 
         try:
-            document = fitz.open(path)
+            document = pymupdf.open(path)
         except Exception as exc:
             raise PDFIngestionError(f"Could not open PDF: {exc}") from exc
 
@@ -96,6 +96,12 @@ class PyMuPDFParser:
 
             if document.page_count == 0:
                 raise PDFIngestionError("PDF contains no pages.")
+
+            pdf_metadata = {
+                key: value
+                for key, value in (document.metadata or {}).items()
+                if isinstance(value, str) and value.strip()
+            }
 
             for page_index in range(document.page_count):
                 page = document.load_page(page_index)
@@ -112,6 +118,7 @@ class PyMuPDFParser:
                 )
 
                 text_block_index = 0
+                image_block_count = 0
 
                 for raw_block in page_dict.get("blocks", []):
                     # 0 = text block
@@ -119,6 +126,7 @@ class PyMuPDFParser:
                     block_type = int(raw_block.get("type", 0))
 
                     if block_type != 0:
+                        image_block_count += 1
                         continue
 
                     lines = raw_block.get("lines", [])
@@ -190,7 +198,14 @@ class PyMuPDFParser:
                 page_text = "\n\n".join(page_text_parts)
 
                 if not page_blocks:
-                    warnings.append(f"Page {page_number}: no extractable text.")
+                    if image_block_count:
+                        warnings.append(
+                            f"Page {page_number}: no extractable text "
+                            f"({image_block_count} image(s) only). "
+                            "This page is likely scanned and would need OCR."
+                        )
+                    else:
+                        warnings.append(f"Page {page_number}: no extractable text.")
 
                 pages.append(
                     PaperPage(
@@ -199,6 +214,7 @@ class PyMuPDFParser:
                         height=float(page.rect.height),
                         blocks=page_blocks,
                         text=page_text,
+                        image_count=image_block_count,
                     )
                 )
 
@@ -218,8 +234,9 @@ class PyMuPDFParser:
                 full_text=full_text,
                 pages=pages,
                 warnings=warnings,
+                pdf_metadata=pdf_metadata,
                 parser=self.parser_name,
-                parser_version=fitz.version[0],
+                parser_version=pymupdf.version[0],
                 page_count=len(pages),
                 extracted_char_count=len(full_text),
             )
