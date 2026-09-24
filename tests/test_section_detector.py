@@ -1,6 +1,7 @@
 import pymupdf
 
 from app.extraction.section_detector import (
+    canonical_role,
     enrich_paper_sections,
 )
 from app.ingestion.pymupdf_parser import PyMuPDFParser
@@ -142,3 +143,52 @@ def test_section_offsets(tmp_path):
         extracted = paper.full_text[section.start_char : section.end_char]
 
         assert extracted.strip() == section.text.strip()
+
+
+def test_exact_heading_matches_win_over_phrase_matches():
+
+    # "summary" alone is an abstract, but the whole phrase is a conclusion.
+    assert canonical_role("Summary") == "abstract"
+    assert canonical_role("Summary and Conclusion") == "conclusion"
+    assert canonical_role("Summary & Conclusion") == "conclusion"
+
+
+def test_canonical_roles_survive_real_world_heading_wording():
+
+    # Headings the old exact-only matching silently dropped.
+    assert canonical_role("Research Methodology") == "methods"
+    assert canonical_role("METHODOLOGY:") == "methods"
+    assert canonical_role("3.1 Experimental Setup") == "methods"
+    assert canonical_role("Chapter 4 Results") == "results"
+    assert canonical_role("Literature Review") == "related_work"
+
+
+def test_prose_is_not_forced_into_a_canonical_role():
+
+    assert canonical_role("Case Study") is None
+    assert canonical_role("Technical Development") is None
+    assert canonical_role("") is None
+
+    # Long enough to be prose rather than a section label, even though it
+    # contains the word "review".
+    assert (
+        canonical_role(
+            "The research gap and positioning This review identifies four gaps."
+        )
+        is None
+    )
+
+
+def test_generic_words_only_count_as_roles_when_they_are_the_whole_heading():
+
+    # These map only as complete headings...
+    assert canonical_role("Analysis") == "discussion"
+    assert canonical_role("Findings") == "results"
+    assert canonical_role("Background") == "intro"
+
+    # ...and never as a word inside a longer phrase, or a title like
+    # "Machine Learning for Tourism Migration Analysis" would be mistaken
+    # for a section heading and dropped.
+    assert canonical_role("Sentiment Analysis") is None
+    assert canonical_role("Machine Learning for Tourism Migration Analysis") is None
+    assert canonical_role("Background and Related Work") == "related_work"

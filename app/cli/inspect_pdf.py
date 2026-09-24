@@ -9,8 +9,11 @@ from app.ingestion.pymupdf_parser import (
 )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Inspect a research-paper PDF.")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="research-paper-ai inspect",
+        description="Inspect a research-paper PDF.",
+    )
 
     parser.add_argument(
         "pdf_path",
@@ -18,18 +21,24 @@ def main() -> None:
         help="Path to the research-paper PDF.",
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "--allow-scanned",
+        action="store_true",
+        help="Inspect a scanned/image-only PDF instead of rejecting it.",
+    )
+
+    args = parser.parse_args(argv)
 
     try:
-        paper = PyMuPDFParser().parse(args.pdf_path)
+        paper = PyMuPDFParser(allow_scanned=args.allow_scanned).parse(args.pdf_path)
     except PDFIngestionError as exc:
         print(f"ERROR: {exc}")
-        raise SystemExit(1)
+        return 1
 
     print("\n=== PAPER INGESTION REPORT ===")
     print(f"Paper ID: {paper.paper_id}")
     print(f"Filename: {paper.filename}")
-    print(f"Parser: {paper.parser_name} {paper.parser_version}")
+    print(f"Parser: {paper.parser} {paper.parser_version}")
     print(f"Pages: {paper.page_count}")
     print(f"Extracted characters: {paper.extracted_char_count}")
     print(f"Total blocks: {sum(len(p.blocks) for p in paper.pages)}")
@@ -64,6 +73,8 @@ def main() -> None:
         print("\n=== WARNINGS ===")
         print("No warnings.")
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

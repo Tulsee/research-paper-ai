@@ -1,7 +1,18 @@
-import sys
+import argparse
+
+from pathlib import Path
 
 from app.ingestion.pipeline import (
     process_pdf,
+)
+
+from app.ingestion.pymupdf_parser import (
+    PDFIngestionError,
+)
+
+from app.storage.paper_store import (
+    DEFAULT_STORE_DIR,
+    save_paper,
 )
 
 
@@ -25,17 +36,96 @@ def _detection_breakdown(items) -> str:
     return "  (" + ", ".join(parts) + ")"
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:
 
-    if len(sys.argv) != 2:
+    parser = argparse.ArgumentParser(
+        prog="research-paper-ai process",
+        description="Parse, enrich and chunk a research-paper PDF.",
+    )
 
-        print("Usage: " "uv run python -m " "app.cli.process_pdf " "<pdf_path>")
+    parser.add_argument(
+        "pdf_paths",
+        type=Path,
+        nargs="+",
+        help="One or more research-paper PDFs.",
+    )
 
-        raise SystemExit(1)
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Write each normalized Paper to the store as JSON.",
+    )
 
-    pdf_path = sys.argv[1]
+    parser.add_argument(
+        "--store",
+        type=Path,
+        default=DEFAULT_STORE_DIR,
+        help="Where --save writes normalized paper JSON.",
+    )
 
-    paper = process_pdf(pdf_path)
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print one summary line per paper instead of the full report.",
+    )
+
+    parser.add_argument(
+        "--allow-scanned",
+        action="store_true",
+        help="Process scanned/image-only PDFs instead of rejecting them.",
+    )
+
+    args = parser.parse_args(argv)
+
+    failures = 0
+
+    for pdf_path in args.pdf_paths:
+
+        try:
+            paper = process_pdf(
+                pdf_path,
+                allow_scanned=args.allow_scanned,
+            )
+
+        except PDFIngestionError as exc:
+
+            print(f"ERROR {pdf_path}: {exc}")
+
+            failures += 1
+
+            continue
+
+        if args.save:
+
+            destination = save_paper(paper, args.store)
+
+            saved_note = f"  ->  {destination}"
+
+        else:
+            saved_note = ""
+
+        if args.quiet:
+
+            print(
+                f"{paper.filename}: "
+                f"{paper.page_count} pages, "
+                f"{len(paper.sections)} sections, "
+                f"{len(paper.chunks)} chunks, "
+                f"{len(paper.warnings)} warnings"
+                f"{saved_note}"
+            )
+
+            continue
+
+        _report(paper)
+
+        if saved_note:
+            print(f"Saved{saved_note}")
+
+    return 1 if failures else 0
+
+
+def _report(paper) -> None:
 
     print()
     print("=" * 70)
@@ -104,4 +194,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

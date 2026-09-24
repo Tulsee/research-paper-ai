@@ -15,24 +15,31 @@ from app.ingestion.pymupdf_parser import (
 
 def process_pdf(
     pdf_path: str | Path,
+    allow_scanned: bool = False,
 ):
+    """
+    The whole of stage 1: PDF -> normalized, chunked Paper.
+
+    The three steps below are stage 1's internal steps, not the plan's
+    stages 1-3.
+    """
 
     # -----------------------------------
-    # Stage 1: Parse PDF
+    # Step 1: Parse PDF
     # -----------------------------------
 
-    parser = PyMuPDFParser()
+    parser = PyMuPDFParser(allow_scanned=allow_scanned)
 
     paper = parser.parse(pdf_path)
 
     # -----------------------------------
-    # Stage 2: Extract structure
+    # Step 2: Extract structure
     # -----------------------------------
 
     paper = enrich_paper(paper)
 
     # -----------------------------------
-    # Stage 3: Chunk
+    # Step 3: Chunk
     # -----------------------------------
 
     chunker = SectionChunker()

@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Corpus data. Source PDFs and derived JSON stay local; gold labels
+# (data/gold/) are hand-made and ARE tracked.
+data/raw_papers/
+data/normalized_papers/
+data/logs/
+
+# Secrets
+.env

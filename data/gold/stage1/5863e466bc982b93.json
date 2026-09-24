@@ -1,0 +1,15 @@
+{
+  "paper_id": "5863e466bc982b93",
+  "filename": "thesis1.pdf",
+  "verified": false,
+  "title": "Detecting Trust-Related Linguistic Signals in Human-AI Conversations",
+  "abstract_prefix": "Conversational AI can sound trustworthy without being reliable, creating a measurement problem \nas well as a safety problem. This research project develops a construct-aware Trust-Signal Analysis \nPip",
+  "canonical_roles": [
+    "abstract",
+    "intro",
+    "methods",
+    "conclusion",
+    "references",
+    "results"
+  ]
+}

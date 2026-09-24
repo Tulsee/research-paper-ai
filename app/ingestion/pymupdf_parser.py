@@ -8,12 +8,48 @@ import pymupdf
 from app.models.paper import Paper, PaperPage, TextBlock
 
 
+def _summarize_pages(page_numbers: list[int], limit: int = 10) -> str:
+    """Render a page list for error messages, e.g. "1, 2, 3 and 4 more"."""
+
+    shown = ", ".join(str(number) for number in page_numbers[:limit])
+
+    remaining = len(page_numbers) - limit
+
+    if remaining > 0:
+        return f"{shown} and {remaining} more"
+
+    return shown
+
+
 class PDFIngestionError(Exception):
     """Raised when a PDF cannot be ingested."""
 
 
+class ScannedPDFError(PDFIngestionError):
+    """Raised when a PDF has no usable text layer and would need OCR."""
+
+
 class PyMuPDFParser:
     parser_name = "pymupdf"
+
+    def __init__(
+        self,
+        allow_scanned: bool = False,
+        max_empty_page_ratio: float = 0.5,
+    ):
+        """
+        v1 policy: scanned PDFs are rejected, not OCR'd.
+
+        A paper whose text layer is missing or mostly missing would flow
+        downstream as a silently thin ``Paper`` and corrupt every later
+        stage, so it fails loudly here instead. ``allow_scanned=True``
+        downgrades the rejection to a warning for deliberate inspection
+        of a known-bad PDF.
+        """
+
+        self.allow_scanned = allow_scanned
+
+        self.max_empty_page_ratio = max_empty_page_ratio
 
     def _generate_paper_id(self, path: Path) -> str:
         file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -61,6 +97,44 @@ class PyMuPDFParser:
         font_name = fonts[0] if fonts else None
 
         return font_size, font_name, is_bold
+
+    def _apply_scanned_policy(
+        self,
+        path: Path,
+        pages: list[PaperPage],
+        full_text: str,
+        warnings: list[str],
+    ) -> None:
+        """Reject a PDF with no usable text layer (see ``__init__``)."""
+
+        empty_pages = [page.page_number for page in pages if not page.blocks]
+
+        empty_ratio = len(empty_pages) / len(pages) if pages else 1.0
+
+        if not full_text.strip():
+            reason = (
+                f"No text could be extracted from any of the {len(pages)} page(s)."
+            )
+
+        elif empty_ratio > self.max_empty_page_ratio:
+            reason = (
+                f"{len(empty_pages)} of {len(pages)} pages have no extractable "
+                f"text (pages {_summarize_pages(empty_pages)})."
+            )
+
+        else:
+            return
+
+        if self.allow_scanned:
+            warnings.append(f"Scanned/image-only PDF accepted anyway: {reason}")
+            return
+
+        raise ScannedPDFError(
+            f"{path.name} appears to be scanned or image-only. {reason} "
+            "This PDF needs OCR before it can be ingested; v1 does not OCR. "
+            "Pass allow_scanned=True to ingest it anyway, accepting that the "
+            "resulting Paper will be incomplete."
+        )
 
     def parse(self, pdf_path: str | Path) -> Paper:
         path = Path(pdf_path)
@@ -225,6 +299,13 @@ class PyMuPDFParser:
                     "Very little text was extracted. "
                     "The PDF may be scanned/image-only."
                 )
+
+            self._apply_scanned_policy(
+                path=path,
+                pages=pages,
+                full_text=full_text,
+                warnings=warnings,
+            )
 
             return Paper(
                 schema_version="1.0",

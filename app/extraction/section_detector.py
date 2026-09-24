@@ -98,12 +98,73 @@ def clean_heading(text: str) -> str:
     return text.strip()
 
 
-def canonical_role(text: str) -> str | None:
+# A heading longer than this is prose, not a section label, so the
+# phrase pass in canonical_role() does not run on it.
+MAX_PHRASE_MATCH_WORDS = 8
+
+# Words that only name a section when they are the WHOLE heading. As a
+# phrase they are ordinary research vocabulary: "Sentiment Analysis" is not
+# a discussion section, and "Migration Analysis" is part of a title.
+EXACT_ONLY_PATTERNS = frozenset(
+    {
+        r"^summary$",
+        r"^background$",
+        r"^motivation$",
+        r"^analysis$",
+        r"^evaluation$",
+        r"^findings$",
+        r"^experiments?$",
+    }
+)
+
+
+def normalize_heading(text: str) -> str:
+    """Lowercase a cleaned heading and flatten the spellings that vary."""
+
     cleaned = clean_heading(text).lower()
+
+    cleaned = cleaned.replace("&", "and")
+
+    # Drop trailing punctuation: "Methodology:" and "Methodology" are one
+    # heading.
+    cleaned = re.sub(r"[\s:;.,\-–—]+$", "", cleaned)
+
+    return " ".join(cleaned.split())
+
+
+def canonical_role(text: str) -> str | None:
+    """
+    Map a heading onto a canonical role, or None if it is not one.
+
+    Two passes. An exact match wins, so "Summary and Conclusion" is a
+    conclusion rather than an abstract. Failing that, a canonical phrase
+    appearing inside a short heading is accepted, which is what catches
+    real-world headings like "Research Methodology" or "Findings and
+    Conclusion" that an exact match alone misses.
+    """
+
+    cleaned = normalize_heading(text)
+
+    if not cleaned:
+        return None
 
     for role, patterns in CANONICAL_PATTERNS.items():
         for pattern in patterns:
             if re.match(pattern, cleaned, re.IGNORECASE):
+                return role
+
+    if len(cleaned.split()) > MAX_PHRASE_MATCH_WORDS:
+        return None
+
+    for role, patterns in CANONICAL_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in EXACT_ONLY_PATTERNS:
+                continue
+
+            # Patterns are anchored phrases; reuse them unanchored.
+            phrase = pattern.strip("^$")
+
+            if re.search(rf"\b(?:{phrase})\b", cleaned, re.IGNORECASE):
                 return role
 
     return None
